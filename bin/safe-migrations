@@ -1,0 +1,129 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+/**
+ * safe-migrations, standalone.
+ *
+ * Works without Laravel booted, so it can run in a CI job that has checked out
+ * the repository and installed nothing. The artisan command is the same linter
+ * with the database read from config instead of the flags.
+ */
+
+$autoload = null;
+
+foreach ([__DIR__ . '/../vendor/autoload.php', __DIR__ . '/../../../autoload.php'] as $candidate) {
+    if (file_exists($candidate)) {
+        $autoload = $candidate;
+        break;
+    }
+}
+
+if ($autoload !== null) {
+    require $autoload;
+} else {
+    // No composer install, which is the normal state of a fresh checkout in
+    // CI. The package has no dependencies, so loading it by hand is enough
+    // and is better than telling somebody to install before they can lint.
+    foreach (['Target', 'Operation', 'Parser', 'Finding', 'Rules', 'Linter', 'Reporter'] as $class) {
+        require __DIR__ . "/../src/{$class}.php";
+    }
+}
+
+use Catidegla\SafeMigrations\{Target, Linter, Reporter};
+
+$argv = $_SERVER['argv'];
+$flag = function (string $name, ?string $default = null) use ($argv): ?string {
+    $index = array_search("--{$name}", $argv, true);
+    return $index === false ? $default : ($argv[$index + 1] ?? null);
+};
+$has = fn (string $name): bool => in_array("--{$name}", $argv, true);
+
+if ($has('help') || count($argv) === 1) {
+    echo <<<TEXT
+
+  safe-migrations
+  Catch Laravel migrations that will lock a table or break a rolling deploy.
+
+    safe-migrations --path database/migrations --database pgsql --version 16
+
+  Options
+    --path <dir>        where the migrations are (default: database/migrations)
+    --database <name>   mysql, mariadb, pgsql, sqlite, sqlsrv
+    --version <n>       the server version, which decides half the rules
+    --since <ref>       only migrations added since this git ref
+    --disable <ids>     comma separated rule ids to skip
+    --json              machine readable
+    --github            GitHub annotations, so findings land on the diff
+    --strict            fail on notices as well
+
+  Exit codes
+    0  nothing that locks or breaks a deploy
+    1  something that does
+    2  the arguments or the path were wrong
+
+  Every rule asks which database and which version. Without --version the
+  rules assume the oldest behaviour, which is the direction that stays loud
+  rather than the one that stays quiet about a real problem.
+
+
+TEXT;
+    exit(0);
+}
+
+$path = $flag('path', 'database/migrations');
+
+if (! is_dir($path)) {
+    fwrite(STDERR, "safe-migrations: {$path} is not a directory\n");
+    exit(2);
+}
+
+$files = [];
+
+foreach (glob(rtrim($path, '/' . DIRECTORY_SEPARATOR) . '/*.php') ?: [] as $file) {
+    $files[$file] = (string) file_get_contents($file);
+}
+
+// Only what a pull request added, which is the useful default in review: the
+// migrations already merged are already running and warning about them again
+// on every build is how the report stops being read.
+if ($since = $flag('since')) {
+    $escaped = escapeshellarg($since);
+    $changed = [];
+    exec("git diff --name-only --diff-filter=A {$escaped} -- " . escapeshellarg($path) . " 2>&1", $changed, $status);
+
+    if ($status === 0) {
+        // git answers with forward slashes on every platform, and glob on
+        // Windows does not, so both sides are normalised before they meet.
+        $forward = fn (string $p): string => strtr($p, DIRECTORY_SEPARATOR, '/');
+
+        $keep = array_flip(array_map(fn ($f) => $forward(trim($f)), $changed));
+        $files = array_filter($files, fn ($f) => isset($keep[$forward($f)]), ARRAY_FILTER_USE_KEY);
+    } else {
+        fwrite(STDERR, "safe-migrations: could not ask git what changed since {$since}, linting everything\n");
+    }
+}
+
+if ($files === []) {
+    echo "\n  No migrations to check.\n\n";
+    exit(0);
+}
+
+$target = Target::of($flag('database', '') ?? '', $flag('version', '') ?? '');
+$disabled = array_filter(array_map('trim', explode(',', $flag('disable', '') ?? '')));
+
+$findings = (new Linter($target, $disabled))->lint($files);
+$reporter = new Reporter(colour: stream_isatty(STDOUT) && getenv('NO_COLOR') === false);
+
+if ($has('json')) {
+    echo $reporter->json($findings, $target, count($files));
+} elseif ($has('github')) {
+    echo $reporter->annotations($findings);
+} else {
+    echo $reporter->terminal($findings, $target, count($files));
+}
+
+$summary = Linter::summarise($findings);
+
+exit(($summary['clean'] && ! ($has('strict') && $summary['notice'] > 0)) ? 0 : 1);

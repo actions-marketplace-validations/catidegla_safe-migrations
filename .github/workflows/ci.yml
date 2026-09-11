@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: PHP ${{ matrix.php }} / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        php: ['8.2', '8.3', '8.4']
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: mbstring, tokenizer
+          coverage: none
+
+      - name: Install
+        run: composer update --prefer-dist --no-interaction --no-progress
+
+      - name: Test
+        run: vendor/bin/phpunit
+
+  standalone:
+    name: The binary runs on a bare checkout
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, tokenizer
+          coverage: none
+
+      # No composer install on purpose. The README says the binary works on a
+      # fresh checkout with nothing installed, and that claim is the reason it
+      # is usable in a CI job that has not built anything yet.
+      - name: Lint a migration with nothing installed
+        run: |
+          mkdir -p /tmp/m
+          cat > /tmp/m/2026_01_01_000000_example.php <<'PHP'
+          <?php
+          return new class extends Migration {
+              public function up(): void
+              {
+                  Schema::table('users', function (Blueprint $table) {
+                      $table->dropColumn('legacy');
+                  });
+              }
+          };
+          PHP
+          php bin/safe-migrations --path /tmp/m --database pgsql --version 16 && {
+            echo "expected a non-zero exit for a dropColumn"; exit 1;
+          } || true
+          php bin/safe-migrations --path /tmp/m --database pgsql --version 16 --json | tee out.json
+          php -r '
+            $r = json_decode(file_get_contents("out.json"), true);
+            if ($r["summary"]["rolling"] !== 1) { fwrite(STDERR, "expected one rolling finding\n"); exit(1); }
+            echo "standalone check passed\n";
+          '
+
+  versions:
+    name: The version dependent rules
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, tokenizer
+          coverage: none
+      - run: composer update --prefer-dist --no-interaction --no-progress
+
+      # Its own job, because this is the claim the whole tool rests on. If the
+      # answer stops changing with the version, the package is a worse copy of
+      # tools that already exist.
+      - name: The answer still changes with the database and the version
+        run: vendor/bin/phpunit --filter 'depends_entirely_on_the_version|blocks_on_postgres_and_is_a_notice_on_mysql|assumes_the_old_behaviour'

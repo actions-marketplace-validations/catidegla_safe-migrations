@@ -1,0 +1,63 @@
+{
+    "name": "catidegla/safe-migrations",
+    "description": "Catch Laravel migrations that will lock a table or break a rolling deploy, before they run. Every rule asks which database and which version, because almost none of this is true in general.",
+    "keywords": [
+        "laravel",
+        "migrations",
+        "database",
+        "zero-downtime",
+        "postgres",
+        "mysql",
+        "lint",
+        "static-analysis",
+        "ci",
+        "deployment"
+    ],
+    "homepage": "https://github.com/catidegla/safe-migrations",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Christ-loisele Atidegla",
+            "homepage": "https://github.com/catidegla",
+            "role": "Developer"
+        }
+    ],
+    "bin": [
+        "bin/safe-migrations"
+    ],
+    "require": {
+        "php": "^8.2"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^10.0|^11.0",
+        "phpunit/phpunit": "^11.0|^12.0"
+    },
+    "suggest": {
+        "illuminate/console": "Adds the artisan command, which reads the database and version from your own config instead of from flags."
+    },
+    "autoload": {
+        "psr-4": {
+            "Catidegla\\SafeMigrations\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Catidegla\\SafeMigrations\\Tests\\": "tests/"
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Catidegla\\SafeMigrations\\SafeMigrationsServiceProvider"
+            ]
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
