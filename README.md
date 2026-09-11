@@ -85,7 +85,7 @@ Naming a rule turns off that rule on that line. A bare `safe-migrations-ignore` 
 ## In CI
 
 ```yaml
-- uses: catidegla/safe-migrations@v0.1.0
+- uses: catidegla/safe-migrations@v0.2.0
   with:
     database: pgsql
     version: '16'
