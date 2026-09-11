@@ -88,3 +88,57 @@ jobs:
       # tools that already exist.
       - name: The answer still changes with the database and the version
         run: vendor/bin/phpunit --filter 'depends_entirely_on_the_version|blocks_on_postgres_and_is_a_notice_on_mysql|assumes_the_old_behaviour'
+
+  action:
+    name: The action runs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: A migration that locks and one that breaks a deploy
+        run: |
+          mkdir -p ci-migrations
+          cat > ci-migrations/2026_01_01_000000_tighten_users.php <<'PHP'
+          <?php
+
+          use Illuminate\Database\Migrations\Migration;
+          use Illuminate\Database\Schema\Blueprint;
+          use Illuminate\Support\Facades\Schema;
+
+          return new class extends Migration
+          {
+              public function up(): void
+              {
+                  Schema::table('users', function (Blueprint $table) {
+                      $table->index('email');
+                      $table->dropColumn('legacy_flag');
+                  });
+              }
+          };
+          PHP
+
+      - id: findings
+        uses: ./
+        continue-on-error: true
+        with:
+          path: ci-migrations
+          database: pgsql
+          version: '16'
+          fail-on-findings: 'true'
+
+      - name: It found both and failed the job
+        run: |
+          [ "${{ steps.findings.outcome }}" = "failure" ] || { echo "the action passed a locking migration"; exit 1; }
+          [ "${{ steps.findings.outputs.findings }}" = "2" ] || { echo "expected 2 findings, got ${{ steps.findings.outputs.findings }}"; exit 1; }
+
+      # The same file on a database where none of it is true. This is the whole
+      # idea of the tool, so the action has to carry it too.
+      - id: sqlite
+        uses: ./
+        with:
+          path: ci-migrations
+          database: sqlite
+          fail-on-findings: 'false'
+
+      - name: fail-on-findings false reports without blocking
+        run: echo "reported ${{ steps.sqlite.outputs.findings }} finding(s) without failing"

@@ -1,0 +1,102 @@
+name: safe-migrations
+description: Catch Laravel migrations that will lock a table or break a rolling deploy, before they run.
+author: Christ-loisele Atidegla
+
+branding:
+  icon: database
+  color: blue
+
+inputs:
+  path:
+    description: Where the migrations are.
+    default: database/migrations
+  database:
+    description: 'mysql, mariadb, pgsql, sqlite or sqlsrv. Every rule asks, because almost none of this is true in general.'
+    required: true
+  version:
+    description: >-
+      The server version, which decides half the rules. Adding a column with a
+      default rewrote the whole table on PostgreSQL 10 and has been instant
+      since 11. Without a version every rule assumes the oldest behaviour,
+      which stays loud rather than staying quiet about a real outage.
+    default: ''
+  since:
+    description: >-
+      Only check migrations added since this ref. On a pull request this
+      defaults to the base of the pull request, because the migrations already
+      merged are already running and warning about them on every build is how
+      the report stops being read.
+    default: ''
+  disable:
+    description: Comma separated rule ids to skip. Disable the rolling deploy rules here if you take the site down to migrate.
+    default: ''
+  strict:
+    description: Fail on notices too. Off by default, since a check that fails on things it admits are usually fine is one people pass --force to.
+    default: 'false'
+  annotations:
+    description: Emit GitHub annotations so findings land on the diff itself.
+    default: 'true'
+  fail-on-findings:
+    description: Fail the job when a migration will lock a table or break a rolling deploy. Set false to report without blocking, which is the right setting on an existing codebase.
+    default: 'true'
+
+outputs:
+  findings:
+    description: How many findings were reported.
+    value: ${{ steps.lint.outputs.findings }}
+  report:
+    description: Path to the JSON report.
+    value: ${{ steps.lint.outputs.report }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up PHP
+      uses: shivammathur/setup-php@v2
+      with:
+        php-version: '8.3'
+        coverage: none
+
+    - id: lint
+      shell: bash
+      run: |
+        since="${{ inputs.since }}"
+        if [ -z "$since" ]; then since="${{ github.event.pull_request.base.sha }}"; fi
+
+        args=(--path "${{ inputs.path }}" --database "${{ inputs.database }}")
+        if [ -n "${{ inputs.version }}" ]; then args+=(--version "${{ inputs.version }}"); fi
+        if [ -n "${{ inputs.disable }}" ]; then args+=(--disable "${{ inputs.disable }}"); fi
+        if [ "${{ inputs.strict }}" = "true" ]; then args+=(--strict); fi
+        if [ "${{ inputs.annotations }}" = "true" ]; then args+=(--github); fi
+
+        if [ -n "$since" ]; then
+          git fetch --no-tags --depth=1 origin "$since" 2>/dev/null || true
+          if git cat-file -e "$since" 2>/dev/null; then
+            args+=(--since "$since")
+          else
+            echo "::warning::could not reach $since, so every migration under ${{ inputs.path }} was checked"
+          fi
+        fi
+
+        # One pass. Annotations go to stderr and the report to stdout, so
+        # asking for both does not silently drop one. The binary has no
+        # dependencies and needs no booted application, so this runs against a
+        # fresh checkout with no composer install.
+        set +e
+        php "${{ github.action_path }}/bin/safe-migrations" "${args[@]}" --json > safe-migrations.json
+        code=$?
+        set -e
+
+        if [ "$code" = "2" ]; then
+          echo "::error::safe-migrations refused the arguments or the path"
+          cat safe-migrations.json 2>/dev/null || true
+          exit 2
+        fi
+
+        findings=$(php -r 'echo json_decode(file_get_contents("safe-migrations.json"), true)["summary"]["total"] ?? 0;')
+        echo "findings=$findings" >> "$GITHUB_OUTPUT"
+        echo "report=safe-migrations.json" >> "$GITHUB_OUTPUT"
+
+        php "${{ github.action_path }}/.github/summary.php" safe-migrations.json >> "$GITHUB_STEP_SUMMARY"
+
+        if [ "${{ inputs.fail-on-findings }}" = "true" ]; then exit $code; fi

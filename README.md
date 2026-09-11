@@ -85,6 +85,24 @@ Naming a rule turns off that rule on that line. A bare `safe-migrations-ignore` 
 ## In CI
 
 ```yaml
+- uses: catidegla/safe-migrations@v0.1.0
+  with:
+    database: pgsql
+    version: '16'
+```
+
+On a pull request it checks only the migrations that pull request added, because
+the ones already merged are already running and warning about them on every
+build is how the report stops being read. Findings arrive as annotations on the
+diff itself.
+
+Or call the binary, which needs no `composer install` and no booted app:
+
+```bash
+vendor/bin/safe-migrations --database pgsql --version 16 --since origin/main --github
+```
+
+```yaml
 - run: vendor/bin/safe-migrations --database pgsql --version 16 --since origin/main --github
 ```
 

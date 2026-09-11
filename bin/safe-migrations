@@ -55,7 +55,8 @@ if ($has('help') || count($argv) === 1) {
     --since <ref>       only migrations added since this git ref
     --disable <ids>     comma separated rule ids to skip
     --json              machine readable
-    --github            GitHub annotations, so findings land on the diff
+    --github            GitHub annotations on stderr, so findings land on the diff
+                        and can be combined with --json
     --strict            fail on notices as well
 
   Exit codes
@@ -116,11 +117,17 @@ $disabled = array_filter(array_map('trim', explode(',', $flag('disable', '') ?? 
 $findings = (new Linter($target, $disabled))->lint($files);
 $reporter = new Reporter(colour: stream_isatty(STDOUT) && getenv('NO_COLOR') === false);
 
+// Annotations go to stderr rather than stdout, so --github composes with
+// whichever report you actually wanted. They are a side channel for the CI
+// host, not this program's output, and making them exclusive meant asking
+// for both silently dropped one of them.
+if ($has('github')) {
+    fwrite(STDERR, $reporter->annotations($findings));
+}
+
 if ($has('json')) {
     echo $reporter->json($findings, $target, count($files));
-} elseif ($has('github')) {
-    echo $reporter->annotations($findings);
-} else {
+} elseif (! $has('github')) {
     echo $reporter->terminal($findings, $target, count($files));
 }
 
